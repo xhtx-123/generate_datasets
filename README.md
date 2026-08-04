@@ -24,6 +24,8 @@ Simply download the script `generate_data.py` and make it executable (optional):
 ```bash
 chmod +x generate_data.py
 
+---
+
 ## Usage
 #Basic usage – generate all three datasets (D1, D2, D3)
 python generate_data.py 32768
@@ -40,3 +42,4 @@ python generate_data.py 20000 D2,D3
 
 #Change output path
 python generate_data.py 32768 --output /path/to/my/data
+---

@@ -2,19 +2,18 @@
 # -*- coding: utf-8 -*-
 
 """
-SM3 Paper Dataset Generator – On‑demand Edition
+SM3 Paper Dataset Generator – On‑demand Edition (without D5)
 
 Supported datasets:
   D1: Fixed 64 KB, CV = 0.00
   D2: Uniform 64 B – 64 KB, CV ≈ 0.58
   D4: Directly constructed mixed distribution (64 B – 64 MB, max file > 30 MB)
-  D5: Heavy‑tail random: 99.75% tiny + 0.25% 256 MB, CV > 6.5
 
 All datasets: 32,768 files, total size ≈ 2 GB (adjustable)
 Fixed seed = 42, fully reproducible.
 
 Usage:
-  # Generate all datasets
+  # Generate all datasets (D1, D2, D4)
   python generate_datasets.py --output ./data --seed 42
 
   # Generate only D4
@@ -53,7 +52,7 @@ def write_file(path, size_bytes):
 
 def generate_sizes_general(num_files, total_blocks, dist_func, seed):
     """
-    Generic weight‑scaling method (used for D1, D2, D5).
+    Generic weight‑scaling method (used for D1, D2).
 
     Generates a list of block counts whose sum equals `total_blocks`.
     Each file gets a weight drawn from `dist_func`; block counts are
@@ -234,21 +233,10 @@ def d4_mixed(rng, idx):
     return 1024
 
 
-def d5_heavy_tail(rng, idx):
-    """
-    D5: heavy‑tail random.
-    99.75% of files are tiny (1–64 blocks), 0.25% are huge (4M blocks = 256 MB).
-    """
-    if rng.random() < 0.9975:
-        return rng.randint(1, 64)
-    else:
-        return 4 * 1024 * 1024   # 256 MB
-
-
 # ---------- Main entry point ----------
 def main():
     parser = argparse.ArgumentParser(
-        description="SM3 Dataset Generator (on‑demand)"
+        description="SM3 Dataset Generator (without D5)"
     )
     parser.add_argument("--output", default="./datasets",
                         help="Root output directory")
@@ -256,8 +244,8 @@ def main():
                         help="Random seed (for reproducibility)")
     parser.add_argument("--target-size", default="2GB",
                         help="Target total size for each dataset (e.g., 2GB, 1500MB)")
-    parser.add_argument("--datasets", default="D1,D2,D4,D5",
-                        help="Comma‑separated list of datasets to generate (default: all)")
+    parser.add_argument("--datasets", default="D1,D2,D4",
+                        help="Comma‑separated list of datasets to generate (default: D1,D2,D4)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Only preview statistics, do not write any files")
     args = parser.parse_args()
@@ -277,7 +265,6 @@ def main():
         "D1": d1_fixed,
         "D2": d2_uniform_small,
         "D4": d4_mixed,   # not used directly, but kept for key existence
-        "D5": d5_heavy_tail,
     }
 
     for name in requested:
@@ -288,7 +275,7 @@ def main():
     configs = [(name, dist_map[name]) for name in requested]
 
     print("=" * 75)
-    print("SM3 Paper Dataset Generator")
+    print("SM3 Paper Dataset Generator (without D5)")
     print(f"  Files per dataset: {NUM_FILES:,}")
     print(f"  Target size: {target_bytes / (1024 ** 3):.2f} GB")
     print(f"  Random seed: {args.seed}")

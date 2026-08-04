@@ -4,26 +4,16 @@
 """
 SM3 Paper Dataset Generator – Flexible File Count (D1, D2, D3)
 
-Datasets:
-  D1: Fixed (degenerate) distribution – every file has exactly the same size.
-  D2: Log‑Normal distribution – mimics real-world file system workloads (CV ~ 2.9).
-  D3: Piecewise log‑uniform mixture (original D4 style) – includes large files > 30 MB.
+Datasets (byte‑level generation, parameters directly comparable to literature):
+  D1: Uniform – files uniformly distributed (CV ≈ 0.58)
+  D2: Log‑Normal – σ = 1.2 (CV ≈ 1.57, within empirical range [1.4, 40])
+  D3: Double Pareto – Laplace scale σ = 0.6, yielding moderate heavy tail (CV ≈ 2.0)
 
-All datasets: user-defined file count, fixed 2 GB total each.
+All datasets: user‑defined file count, fixed total size (2.5 GB default).
 Fully reproducible (seed = 42 by default).
 
-Usage Examples:
-  # Generate all three datasets (D1, D2, D3) with 32,768 files each
-  python generate_data.py 32768
-
-  # Generate only D1 with 10,000 files
-  python generate_data.py 10000 D1
-
-  # Generate D1 and D3 with 50,000 files
-  python generate_data.py 50000 D1,D3
-
-  # Dry-run preview
-  python generate_data.py 32768 --dry-run
+Usage:
+  python generate_data.py <num_files> [D1,D2,D3] [--seed N] [--output DIR] [--dry-run]
 """
 
 import os
@@ -37,9 +27,7 @@ from pathlib import Path
 
 # ---------- Fixed parameters ----------
 DEFAULT_SEED = 42
-BLOCK_SIZE = 64
-TARGET_BYTES = 2 * 1024 ** 3          # 2 GB per dataset
-TOTAL_BLOCKS = TARGET_BYTES // BLOCK_SIZE
+TARGET_BYTES = int(2.5 * 1024 ** 3)          # 2.5 GB per dataset
 PATTERN = b'SM3_BENCHMARK_PATTERN_v1.0_'
 
 
@@ -54,112 +42,106 @@ def write_file(path, size_bytes):
             written += chunk
 
 
-def adjust_to_total(blocks, total_blocks):
+def adjust_to_total(sizes, total_bytes):
     """
-    Efficiently adjust block counts so that sum(blocks) == total_blocks.
-    Uses proportional scaling + round-robin remainder distribution.
+    Efficiently adjust file sizes so that sum(sizes) == total_bytes.
+    Uses proportional scaling + round‑robin remainder distribution.
     O(N) and works even when the initial sum is far from target.
+    All values are integers (bytes).
     """
-    n = len(blocks)
-    # Ensure no zero blocks
+    n = len(sizes)
+    # Ensure no zero‑byte files
     for i in range(n):
-        if blocks[i] == 0:
-            blocks[i] = 1
+        if sizes[i] == 0:
+            sizes[i] = 1
 
-    current = sum(blocks)
-    if current == total_blocks:
-        return blocks
+    current = sum(sizes)
+    if current == total_bytes:
+        return sizes
 
     # Scale proportionally
-    scale = total_blocks / current
-    new_blocks = [max(1, int(round(b * scale))) for b in blocks]
+    scale = total_bytes / current
+    new_sizes = [max(1, int(round(s * scale))) for s in sizes]
 
     # Adjust remainder
-    current_new = sum(new_blocks)
-    diff = total_blocks - current_new
+    current_new = sum(new_sizes)
+    diff = total_bytes - current_new
 
     if diff > 0:
-        idx = sorted(range(n), key=lambda i: new_blocks[i], reverse=True)
+        idx = sorted(range(n), key=lambda i: new_sizes[i], reverse=True)
         for i in range(diff):
-            new_blocks[idx[i % n]] += 1
+            new_sizes[idx[i % n]] += 1
     elif diff < 0:
-        idx = sorted(range(n), key=lambda i: new_blocks[i], reverse=True)
+        idx = sorted(range(n), key=lambda i: new_sizes[i], reverse=True)
         for i in range(-diff):
-            if new_blocks[idx[i % n]] > 1:
-                new_blocks[idx[i % n]] -= 1
+            if new_sizes[idx[i % n]] > 1:
+                new_sizes[idx[i % n]] -= 1
 
-    assert sum(new_blocks) == total_blocks, f"Sum={sum(new_blocks)}, target={total_blocks}"
-    return new_blocks
+    assert sum(new_sizes) == total_bytes, f"Sum={sum(new_sizes)}, target={total_bytes}"
+    return new_sizes
 
 
-def generate_sizes_d1(num_files, total_blocks, seed):
+# ---------- Distribution generators (byte‑level) ----------
+def generate_sizes_d1(num_files, total_bytes, seed):
     """
-    D1: Degenerate (fixed) distribution.
-    Every file gets exactly (total_blocks / num_files) blocks.
-    CV = 0.00 (perfect baseline).
-    """
-    mean = total_blocks / num_files
-    base = int(math.floor(mean))
-    blocks = [base] * num_files
-    # Distribute the fractional remainder to some files
-    remainder = total_blocks - sum(blocks)
-    for i in range(remainder):
-        blocks[i] += 1
-    return blocks
-
-
-def generate_sizes_d2(num_files, total_blocks, seed):
-    """
-    D2: Log‑Normal distribution.
-    Mimics real-world file system size distributions (e.g., NTFS, Ext4).
-    sigma = 1.5  ->  CV ≈ sqrt(exp(2.25) - 1) ≈ 2.91.
-    The arithmetic mean is preserved as total_blocks / num_files.
+    D1: Uniform distribution.
+    Sizes uniformly drawn from [mean/16, mean*1.94], where mean = total_bytes / num_files.
+    CV ≈ 0.58.
     """
     rng = random.Random(seed)
-    mean = total_blocks / num_files
-    sigma = 1.5
-    # Convert arithmetic mean to log-space mean
+    mean = total_bytes / num_files
+    low = max(1, int(mean / 16))
+    high = max(low + 1, int(mean * 1.94))
+
+    sizes = [rng.randint(low, high) for _ in range(num_files)]
+    return adjust_to_total(sizes, total_bytes)
+
+
+def generate_sizes_d2(num_files, total_bytes, seed):
+    """
+    D2: Log‑Normal distribution.
+    sigma = 1.2  ->  CV ≈ sqrt(exp(1.44) - 1) ≈ 1.57.
+    This falls within the empirical range (σ ≈ 1.4–40) reported in literature.
+    The arithmetic mean is preserved as total_bytes / num_files.
+    """
+    rng = random.Random(seed)
+    mean = total_bytes / num_files
+    sigma = 1.2
     mu = math.log(mean) - (sigma ** 2) / 2.0
 
-    blocks = []
+    sizes = []
     for _ in range(num_files):
         val = int(round(rng.lognormvariate(mu, sigma)))
         if val < 1:
             val = 1
-        blocks.append(val)
+        sizes.append(val)
 
-    return adjust_to_total(blocks, total_blocks)
+    return adjust_to_total(sizes, total_bytes)
 
 
-def generate_sizes_d3(num_files, total_blocks, seed):
+def generate_sizes_d3(num_files, total_bytes, seed):
     """
-    D3 (originally D4): Piecewise log‑uniform mixture.
-    Segments: 0.15% large (scaled ~512–1024×mean), 20% medium (~2–256×mean), rest small.
+    D3: Double Pareto distribution (generated via Laplace).
+    Let Y ~ Laplace(μ, σ), then X = exp(Y) follows a Double Pareto.
+    With σ = 0.6 (Laplace scale), the tail is moderately heavy (CV ≈ 1.8–2.2).
+    The arithmetic mean is preserved as total_bytes / num_files.
     """
     rng = random.Random(seed)
-    mean = total_blocks / num_files
+    mean = total_bytes / num_files
+    sigma = 0.5
+    mu = math.log(mean) - (sigma ** 2) / 2.0
 
-    large_count = max(1, int(num_files * 0.0015))
-    medium_count = int(num_files * 0.20)
-    small_count = num_files - large_count - medium_count
+    sizes = []
+    for _ in range(num_files):
+        e1 = rng.expovariate(1)
+        e2 = rng.expovariate(1)
+        Y = mu + sigma * (e1 - e2)
+        val = int(round(math.exp(Y)))
+        if val < 1:
+            val = 1
+        sizes.append(val)
 
-    large_blocks = [
-        rng.randint(int(mean * 512), int(mean * 1024))
-        for _ in range(large_count)
-    ]
-    medium_blocks = [
-        rng.randint(int(mean * 2), int(mean * 256))
-        for _ in range(medium_count)
-    ]
-    small_blocks = [
-        rng.randint(1, int(mean * 2))
-        for _ in range(small_count)
-    ]
-
-    all_blocks = large_blocks + medium_blocks + small_blocks
-    rng.shuffle(all_blocks)
-
-    return adjust_to_total(all_blocks, total_blocks)
+    return adjust_to_total(sizes, total_bytes)
 
 
 def generate_dataset(output_dir, name, num_files, gen_func, seed):
@@ -167,16 +149,15 @@ def generate_dataset(output_dir, name, num_files, gen_func, seed):
     out_path = Path(output_dir) / name
     out_path.mkdir(parents=True, exist_ok=True)
 
-    blocks = gen_func(num_files, TOTAL_BLOCKS, seed)
-    sizes = [b * BLOCK_SIZE for b in blocks]
+    sizes = gen_func(num_files, TARGET_BYTES, seed)
 
     start = time.time()
     for i, sz in enumerate(sizes):
         write_file(out_path / f"file_{i:06d}_{sz}B.bin", sz)
     elapsed = time.time() - start
 
-    mean_b = statistics.mean(blocks)
-    stdev_b = statistics.stdev(blocks) if len(blocks) > 1 else 0.0
+    mean_b = statistics.mean(sizes)
+    stdev_b = statistics.stdev(sizes) if len(sizes) > 1 else 0.0
     cv = stdev_b / mean_b if mean_b > 0 else 0.0
 
     stats = {
@@ -186,8 +167,8 @@ def generate_dataset(output_dir, name, num_files, gen_func, seed):
         "total_MB": sum(sizes) / (1024 * 1024),
         "total_GB": sum(sizes) / (1024 ** 3),
         "target_GB": TARGET_BYTES / (1024 ** 3),
-        "mean_blocks": mean_b,
-        "std_blocks": stdev_b,
+        "mean_bytes": mean_b,
+        "std_bytes": stdev_b,
         "cv": cv,
         "min_bytes": min(sizes),
         "max_bytes": max(sizes),
@@ -204,8 +185,8 @@ def generate_dataset(output_dir, name, num_files, gen_func, seed):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate SM3 datasets (D1: Fixed, D2: Log‑Normal, D3: Mixture) "
-                    "with flexible file count, fixed 2GB total."
+        description="Generate SM3 datasets (D1: Uniform, D2: Log‑Normal, D3: Double Pareto) "
+                    "with flexible file count, fixed total size (byte‑level generation)."
     )
     parser.add_argument(
         "num_files",
@@ -216,7 +197,7 @@ def main():
         "datasets",
         nargs='?',
         default="D1,D2,D3",
-        help="Comma-separated dataset names (D1, D2, D3). Default: D1,D2,D3"
+        help="Comma‑separated dataset names (D1, D2, D3). Default: D1,D2,D3"
     )
     parser.add_argument(
         "--seed",
@@ -255,7 +236,7 @@ def main():
     }
 
     print("=" * 80)
-    print("SM3 Dataset Generator (D1: Fixed, D2: Log‑Normal, D3: Mixture)")
+    print("SM3 Dataset Generator (Byte‑level: D1 Uniform, D2 Log‑Normal, D3 Double Pareto)")
     print(f"  Files per dataset: {args.num_files:,}")
     print(f"  Target size per dataset: {TARGET_BYTES / (1024**3):.2f} GB")
     print(f"  Random seed: {args.seed}")
@@ -263,14 +244,14 @@ def main():
     print("=" * 80)
 
     if args.dry_run:
-        print("\n[DRY RUN] Estimated statistics:\n")
+        print("\n[DRY RUN] Estimated statistics (in bytes):\n")
         for name in dataset_names:
-            blocks = gen_map[name](args.num_files, TOTAL_BLOCKS, args.seed)
-            avg = statistics.mean(blocks)
-            stdev = statistics.stdev(blocks) if len(blocks) > 1 else 0.0
+            sizes = gen_map[name](args.num_files, TARGET_BYTES, args.seed)
+            avg = statistics.mean(sizes)
+            stdev = statistics.stdev(sizes) if len(sizes) > 1 else 0.0
             cv = stdev / avg if avg > 0 else 0.0
-            max_mb = max(blocks) * BLOCK_SIZE / (1024 * 1024)
-            print(f"  {name}: avg = {avg:.2f} blocks, CV = {cv:.4f}, max = {max_mb:.2f} MB")
+            max_mb = max(sizes) / (1024 * 1024)
+            print(f"  {name}: avg = {avg:.2f} B, CV = {cv:.4f}, max = {max_mb:.2f} MB")
         return
 
     all_stats = []
@@ -292,12 +273,12 @@ def main():
     total_elapsed = time.time() - total_start
 
     print("\n" + "=" * 90)
-    print(f"Summary (all datasets have {args.num_files} files, fixed 2GB each)")
+    print(f"Summary (all datasets have {args.num_files} files, fixed {TARGET_BYTES/(1024**3):.1f}GB each)")
     print("=" * 90)
-    print(f"{'Dataset':<10} {'Size(GB)':<12} {'Mean(blocks)':<14} {'CV':<12} {'Max(MB)':<12}")
+    print(f"{'Dataset':<10} {'Size(GB)':<12} {'Mean(B)':<14} {'CV':<12} {'Max(MB)':<12}")
     for s in all_stats:
         print(f"{s['name']:<10} {s['total_GB']:<12.3f} "
-              f"{s['mean_blocks']:<14.2f} {s['cv']:<12.4f} {s['max_MB']:<12.2f}")
+              f"{s['mean_bytes']:<14.2f} {s['cv']:<12.4f} {s['max_MB']:<12.2f}")
 
     print("\n" + "=" * 90)
     print(f"All datasets saved under: {Path(args.output).absolute()}")

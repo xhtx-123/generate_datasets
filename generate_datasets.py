@@ -5,9 +5,9 @@
 SM3 Paper Dataset Generator – Flexible File Count (D1, D2, D3)
 
 Datasets:
-  D1: Uniform distribution (scaled to keep 2GB total)
-  D2: Normal (Gaussian) distribution (scaled to keep 2GB total)
-  D3: Piecewise log‑uniform mixture (original D4 style)
+  D1: Fixed (degenerate) distribution – every file has exactly the same size.
+  D2: Log‑Normal distribution – mimics real-world file system workloads (CV ~ 2.9).
+  D3: Piecewise log‑uniform mixture (original D4 style) – includes large files > 30 MB.
 
 All datasets: user-defined file count, fixed 2 GB total each.
 Fully reproducible (seed = 42 by default).
@@ -94,38 +94,38 @@ def adjust_to_total(blocks, total_blocks):
 
 def generate_sizes_d1(num_files, total_blocks, seed):
     """
-    D1: Uniform distribution (scaled to match original D2 range).
-    Blocks uniformly drawn from [mean/16, mean*1.94].
-    This preserves the exact shape of the original D2 (CV ~ 0.58).
+    D1: Degenerate (fixed) distribution.
+    Every file gets exactly (total_blocks / num_files) blocks.
+    CV = 0.00 (perfect baseline).
     """
-    rng = random.Random(seed)
     mean = total_blocks / num_files
-    low = max(1, int(mean / 16))
-    high = max(low + 1, int(mean * 1.94))
-
-    blocks = [rng.randint(low, high) for _ in range(num_files)]
-    return adjust_to_total(blocks, total_blocks)
+    base = int(math.floor(mean))
+    blocks = [base] * num_files
+    # Distribute the fractional remainder to some files
+    remainder = total_blocks - sum(blocks)
+    for i in range(remainder):
+        blocks[i] += 1
+    return blocks
 
 
 def generate_sizes_d2(num_files, total_blocks, seed):
     """
-    D2: Normal (Gaussian) distribution.
-    Blocks drawn from a truncated normal with mean = total_blocks/num_files,
-    standard deviation = mean * 0.3 (CV ≈ 0.30).
-    Values are clipped to [1, 2*mean] to avoid extremes.
+    D2: Log‑Normal distribution.
+    Mimics real-world file system size distributions (e.g., NTFS, Ext4).
+    sigma = 1.5  ->  CV ≈ sqrt(exp(2.25) - 1) ≈ 2.91.
+    The arithmetic mean is preserved as total_blocks / num_files.
     """
     rng = random.Random(seed)
     mean = total_blocks / num_files
-    sigma = mean * 0.3   # CV ≈ 0.30
+    sigma = 1.5
+    # Convert arithmetic mean to log-space mean
+    mu = math.log(mean) - (sigma ** 2) / 2.0
 
     blocks = []
     for _ in range(num_files):
-        val = -1
-        while val < 1:   # Re-sample if non-positive
-            val = int(round(rng.gauss(mean, sigma)))
-        # Clip to avoid absurdly large outliers (optional)
-        if val > 2 * mean:
-            val = int(2 * mean)
+        val = int(round(rng.lognormvariate(mu, sigma)))
+        if val < 1:
+            val = 1
         blocks.append(val)
 
     return adjust_to_total(blocks, total_blocks)
@@ -204,7 +204,7 @@ def generate_dataset(output_dir, name, num_files, gen_func, seed):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate SM3 datasets (D1: Uniform, D2: Normal, D3: Mixture) "
+        description="Generate SM3 datasets (D1: Fixed, D2: Log‑Normal, D3: Mixture) "
                     "with flexible file count, fixed 2GB total."
     )
     parser.add_argument(
@@ -255,7 +255,7 @@ def main():
     }
 
     print("=" * 80)
-    print("SM3 Dataset Generator (D1: Uniform, D2: Normal, D3: Mixture)")
+    print("SM3 Dataset Generator (D1: Fixed, D2: Log‑Normal, D3: Mixture)")
     print(f"  Files per dataset: {args.num_files:,}")
     print(f"  Target size per dataset: {TARGET_BYTES / (1024**3):.2f} GB")
     print(f"  Random seed: {args.seed}")

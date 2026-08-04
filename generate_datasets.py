@@ -7,7 +7,7 @@ SM3 Paper Dataset Generator – Flexible File Count (D1, D2, D3)
 Datasets (byte‑level generation, parameters directly comparable to literature):
   D1: Uniform – files uniformly distributed (CV ≈ 0.58)
   D2: Log‑Normal – σ = 1.2 (CV ≈ 1.57, within empirical range [1.4, 40])
-  D3: Double Pareto – Laplace scale σ = 0.6, yielding moderate heavy tail (CV ≈ 2.0)
+  D3: Double Pareto – Laplace scale b = 0.5, yielding moderate heavy tail (CV ≈ 2.0)
 
 All datasets: user‑defined file count, fixed total size (2.5 GB default).
 Fully reproducible (seed = 42 by default).
@@ -122,20 +122,26 @@ def generate_sizes_d2(num_files, total_bytes, seed):
 def generate_sizes_d3(num_files, total_bytes, seed):
     """
     D3: Double Pareto distribution (generated via Laplace).
-    Let Y ~ Laplace(μ, σ), then X = exp(Y) follows a Double Pareto.
-    With σ = 0.6 (Laplace scale), the tail is moderately heavy (CV ≈ 1.8–2.2).
+    Let Y ~ Laplace(μ, b), then X = exp(Y) follows a Double Pareto.
+    With b = 0.5 (Laplace scale), the tail is moderately heavy (CV ≈ 1.8–2.2).
     The arithmetic mean is preserved as total_bytes / num_files.
+
+    Correct mean preservation for Double Pareto:
+      E[exp(Y)] = exp(μ) / (1 - b^2)  for b < 1.
+    Thus μ = log(mean * (1 - b^2)).
     """
     rng = random.Random(seed)
     mean = total_bytes / num_files
-    sigma = 0.5
-    mu = math.log(mean) - (sigma ** 2) / 2.0
+    b = 0.5
+    # Correct formula for Double Pareto mean
+    mu = math.log(mean * (1 - b ** 2))
 
     sizes = []
     for _ in range(num_files):
+        # Laplace: Y = μ + b * (E1 - E2), where E1, E2 ~ Exp(1)
         e1 = rng.expovariate(1)
         e2 = rng.expovariate(1)
-        Y = mu + sigma * (e1 - e2)
+        Y = mu + b * (e1 - e2)
         val = int(round(math.exp(Y)))
         if val < 1:
             val = 1
